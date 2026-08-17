@@ -64,7 +64,7 @@ async def webhook_endpoint(request: Request):
     raw_body = await request.body()
     sig_header = request.headers.get("X-PseudoGram-Signature", "")
 
-    if sig_header and not verify_signature(raw_body, sig_header):
+    if not verify_signature(raw_body, sig_header):
         logger.warning("Rejecting webhook due to invalid HMAC signature")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
 
@@ -73,9 +73,14 @@ async def webhook_endpoint(request: Request):
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload")
 
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload")
+
     event_id = payload.get("event_id")
     event_type = payload.get("event_type")
-    data = payload.get("data", {})
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
 
     if not event_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_id")

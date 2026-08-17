@@ -1,16 +1,21 @@
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import List, Dict, Any, Optional
 from app.config import DB_PATH
 
 logger = logging.getLogger("linkplease.db")
 
-def get_connection() -> sqlite3.Connection:
+@contextmanager
+def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=30000;")
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 def init_db():
     with get_connection() as conn:
