@@ -204,3 +204,39 @@ def test_worker_requeue_and_retry_exhaustion():
     database.update_dm_status(dm_id_db, "failed")
     stats = client.get("/stats").json()
     assert stats["failed"] == 1
+
+def test_webhook_hmac_robustness():
+    from app import config
+
+    orig_key = config.PSEUDOGRAM_API_KEY
+    try:
+        # 1. Test key with trailing newline/spaces (simulating Render env var)
+        config.PSEUDOGRAM_API_KEY = "test_secret_key\n "
+
+        payload = {"event_id": "evt_robust_1", "event_type": "comment.created", "data": {}}
+        raw_body = json.dumps(payload).encode("utf-8")
+        clean_sig = compute_sig(raw_body, "test_secret_key")
+
+        # Must succeed despite trailing whitespace in environment variable
+        res = client.post("/webhook", content=raw_body, headers={"X-PseudoGram-Signature": clean_sig})
+        assert res.status_code == 200
+
+        # 2. Test header with uppercase SHA256= prefix
+        upper_prefix_sig = "SHA256=" + hmac.new(b"test_secret_key", raw_body, hashlib.sha256).hexdigest()
+        res2 = client.post("/webhook", content=raw_body, headers={"X-PseudoGram-Signature": upper_prefix_sig})
+        assert res2.status_code == 200
+
+        # 3. Test header with uppercase hex digest
+        upper_hex_sig = "sha256=" + hmac.new(b"test_secret_key", raw_body, hashlib.sha256).hexdigest().upper()
+        res3 = client.post("/webhook", content=raw_body, headers={"X-PseudoGram-Signature": upper_hex_sig})
+        assert res3.status_code == 200
+
+        # 4. Test PseudoGram raw-body HMAC request (exact raw body bytes)
+        raw_sim_body = b'{"event_id":"evt_sim_99","event_type":"comment.created","data":{"comment_id":"c1","text":"PRICE","from":{"user_id":"u1"}}}'
+        sim_sig = compute_sig(raw_sim_body, "test_secret_key")
+        res4 = client.post("/webhook", content=raw_sim_body, headers={"X-PseudoGram-Signature": sim_sig, "Content-Type": "application/json"})
+        assert res4.status_code == 200
+
+    finally:
+        config.PSEUDOGRAM_API_KEY = orig_key
+

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException, status
 from pydantic import BaseModel
 
-from app.config import PSEUDOGRAM_API_KEY
+from app import config
 from app import database
 from app import worker
 
@@ -42,22 +42,40 @@ class CreateRuleRequest(BaseModel):
     dm_message: str
 
 def verify_signature(raw_body: bytes, signature_header: str) -> bool:
-    if not PSEUDOGRAM_API_KEY:
-        return True # If API key not set, pass verification
+    api_key = (getattr(config, "PSEUDOGRAM_API_KEY", "") or "").strip().strip("'\"")
+    if not api_key:
+        logger.info("HMAC verification skipped: PSEUDOGRAM_API_KEY is not set.")
+        return True
     if not signature_header:
+        logger.warning("Rejecting webhook: Missing X-PseudoGram-Signature header. Body len: %d", len(raw_body))
         return False
 
     expected_sig = hmac.new(
-        PSEUDOGRAM_API_KEY.encode("utf-8"),
+        api_key.encode("utf-8"),
         raw_body,
         hashlib.sha256
-    ).hexdigest()
+    ).hexdigest().lower()
 
-    sig_to_check = signature_header.strip()
-    if sig_to_check.startswith("sha256="):
+    sig_to_check = signature_header.strip().strip("'\"")
+    if sig_to_check.lower().startswith("sha256="):
+        sig_to_check = sig_to_check[7:]
+    elif sig_to_check.lower().startswith("sha256:"):
         sig_to_check = sig_to_check[7:]
 
-    return hmac.compare_digest(expected_sig, sig_to_check)
+    sig_to_check = sig_to_check.strip().lower()
+
+    is_valid = hmac.compare_digest(expected_sig, sig_to_check)
+
+    sig_header_prefix = signature_header[:10] if signature_header else ""
+    computed_prefix = expected_sig[:10] if expected_sig else ""
+    received_prefix = sig_to_check[:10] if sig_to_check else ""
+    logger.info(
+        "HMAC verify: body_len=%d, header_prefix='%s...', computed_prefix='%s...', received_prefix='%s...', match=%s",
+        len(raw_body), sig_header_prefix, computed_prefix, received_prefix, is_valid
+    )
+
+    return is_valid
+
 
 @app.post("/webhook")
 async def webhook_endpoint(request: Request):
@@ -117,3 +135,6 @@ async def create_rule(req: CreateRuleRequest):
 @app.get("/stats")
 async def get_stats():
     return database.get_stats()
+
+
+                                                                                    
